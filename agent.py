@@ -28,7 +28,7 @@ TOOLS = [
         'description': (
             'List files and directories under a path, relative to the project '
             'root. Use this to explore the project structure before reading '
-            'anything. Pass "." for teh root itself.'
+            'anything. Pass "." for the root itself.'
         ),
         'input_schema': {
             'type': 'object',
@@ -94,12 +94,46 @@ def read_file(path: str) -> str:
 TOOL_FUNCS = {'list_files': list_files, 'read_file': read_file}
 
 ### LOOPS
+
+def show_content(step: int, messages: list) -> None:
+    print(f'\nSTEP {step}')
+    for message in messages:
+        print(f'[{message['role']}]')
+        content = message['content']
+        if isinstance(content, str):
+            print(content)
+            continue
+        for block in content:
+            kind = block['type'] if isinstance(block, dict) else block.type
+            if kind == 'text':
+                text = block['text'] if isinstance(block, dict) else block.text
+                print(text)
+            elif kind == 'tool_use':
+                name = block['name'] if isinstance(block, dict) else block.name
+                tool_input = block['input'] if isinstance(block, dict) else block.input
+                print(f'tool_use {name}({json.dumps(tool_input)})')
+            elif kind == 'tool_result':
+                print(block['content'])
+            elif kind == 'thinking':
+                thinking = block['thinking'] if isinstance(block, dict) else block.thinking
+                print(thinking or '(thinking restored on the server from the signature)')
+                
+    print()
+    print()
+    
 def run_agent(question: str) -> str:
     client = anthropic.Anthropic()
     messages = [{'role': 'user', 'content': question}]
+    step = 1
     while True:
+        show_content(step,messages)
+
         reply = client.messages.create(
-            model=MODEL, max_tokens=2048, tools=TOOLS, messages=messages
+            model=MODEL,
+            max_tokens=2048,
+            tools=TOOLS,
+            thinking={'type': 'adaptive', 'display': 'summarized'},
+            messages=messages
         )
         messages.append({'role': 'assistant', 'content': reply.content})
         if reply.stop_reason != 'tool_use':
@@ -110,21 +144,19 @@ def run_agent(question: str) -> str:
         for block in reply.content:
             if block.type != 'tool_use':
                 continue
-            print(f'  -> {block.name}({json.dumps(block.input)})')
             try: 
                 output = TOOL_FUNCS[block.name](**block.input)
             except Exception as exc:
                 output = f'Error: {exc}'
-            results.append(
-                {
-                    'type': 'tool_result',
-                    'tool_use_id': block.id,
-                    'content': output, 
-                }
-            )
+            results.append({
+                'type': 'tool_result',
+                'tool_use_id': block.id,
+                'content': output, 
+            })
+
             
         messages.append({'role': 'user', 'content': results})
-        
+        step+=1
 
 
 if __name__ == '__main__':
