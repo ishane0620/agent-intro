@@ -6,12 +6,19 @@ a dispatcher, and the loop
     python file_agent.py ./some_project "which file defines the User class?"
 """
 
+import argparse 
 import json
+import os
+import re
 from pyexpat.errors import messages
 import sys
 from pathlib import Path
 
+
+
+
 import anthropic
+from prompts import build_system_prompt
 
 MODEL = 'claude-sonnet-5'
 ROOT = Path.cwd()
@@ -23,6 +30,33 @@ ROOT = Path.cwd()
 ###
 
 TOOLS = [
+    {
+        'name': f'grep_files',
+        'description': (
+            'Search file contents for a Python regular expression. Returns '
+            'matching lines as relative/path.py:42: <line text>. '
+            'Prefer grep_files over read_file when looking for a '
+            'definition or a usage. Pass "." to search the whole project.' 
+        ),
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'pattern': {
+                    'type': 'string',
+                    'description': 'Python regular expression to search for.',
+                },
+                'path': {
+                    'type': 'string',
+                    'description': 'Relative directory path to search. Defaults to ".".',
+                },
+                'max_results': {
+                    'type': 'number',
+                    'description': 'Maximum number of results to return. Defaults to 50.',
+                },
+            },
+            'required': ['pattern'],
+        },
+    },
     {
         'name': 'list_files',
         'description': (
@@ -60,6 +94,51 @@ TOOLS = [
 # Plain functions. Nothing about it knows an LLM is going to cal it.
 # Each returns a string, as a string is what goes back into the conversation the LLM can read
 ###
+SKIP_DIRS = {'.git', 'node_modules', '__pycache__', 'venv', 'dist'}
+def _is_binary(path: Path) -> bool:
+    try:
+        chunk = path.read_bytes()[:8192]
+    except OSError:
+        return True
+    return b'\0' in chunk
+def grep_files(pattern: str, path: str = '.', max_results: int = 50) -> str:
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return str(exc)
+    target = safe_path(path)
+    if target.is_file():
+        files = [target]
+    elif target.is_dir():
+        files = []
+        for dirpath, dirnames, filenames in os.walk(target):
+            dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+            for name in filenames:
+                files.append(Path(dirpath) / name)
+    else:
+        return f'Not found: {path}'
+    matches = []
+    extra = 0
+    for file in files:
+        if _is_binary(file):
+            continue
+        try:
+            text = file.read_text(encoding='utf-8')
+        except (UnicodeDecodeError, OSError):
+            continue
+        relative = file.relative_to(ROOT).as_posix()
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not regex.search(line):
+                continue
+            if len(matches) < max_results:
+                matches.append(f'{relative}:{line_number}: {line}')
+            else:
+                extra += 1
+    if not matches:
+        return '(no matches)'
+    if extra:
+        matches.append(f'... {extra} more matches')
+    return '\n'.join(matches)
 
 
 def safe_path(path: str) -> Path:
@@ -91,7 +170,11 @@ def read_file(path: str) -> str:
 
 ### DISPATCHER
 
-TOOL_FUNCS = {'list_files': list_files, 'read_file': read_file}
+TOOL_FUNCS = {
+    'list_files': list_files, 
+    'read_file': read_file, 
+    'grep_files': grep_files,
+}
 
 ### LOOPS
 
@@ -121,8 +204,9 @@ def show_content(step: int, messages: list) -> None:
     print()
     print()
     
-def run_agent(question: str) -> str:
+def run_agent(question: str, extra: str | None = None) -> str:
     client = anthropic.Anthropic()
+    system_prompt= build_system_prompt(ROOT, extra)
     messages = [{'role': 'user', 'content': question}]
     step = 1
     while True:
@@ -131,6 +215,7 @@ def run_agent(question: str) -> str:
         reply = client.messages.create(
             model=MODEL,
             max_tokens=2048,
+            system=system_prompt,
             tools=TOOLS,
             thinking={'type': 'adaptive', 'display': 'summarized'},
             messages=messages
@@ -160,6 +245,13 @@ def run_agent(question: str) -> str:
 
 
 if __name__ == '__main__':
-    ROOT = Path(sys.argv[1]).resolve()
-    print(run_agent(sys.argv[2]))
+    parser = argparse.ArgumentParser(description='A read-only file searching agent.')
+    parser.add_argument('root', type=Path, help='Project directory to search.')
+    parser.add_argument('question', help='Question to ask about a file.')
+    parser.add_argument('--system-extra',
+    default=None, help='Extra system prompt text.')
+    args = parser.parse_args()
+
+    ROOT = args.root.resolve()
+    print(run_agent(args.question, args.system_extra))
 
