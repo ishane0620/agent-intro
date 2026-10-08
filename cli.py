@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-from agent.events import TextDelta, ToolCallStarted, TurnFinished
+from agent.events import TextDelta, ToolCallStarted, TurnFinished, UsageUpdated
 import file_agent
 from agent.loop import Agent
 from prompts import build_system_prompt
@@ -49,6 +49,14 @@ def main() -> None:
         if line == '/messages':
             print(json.dumps(plain(agent.messages), indent=2))
             continue
+        if line == '/usage':
+            usage = agent.usage
+            print(
+                f'{usage.input_tokens} in, {usage.output_tokens} out, '
+                f'{usage.cache_read_tokens} cache read, {usage.cache_write_tokens} cache write, '
+                f'${usage.cost(agent.model):.4f}'
+            )
+            continue
         for event in agent.prompt(line):
             if isinstance(event, TextDelta):
                 print(event.text, end='', flush=True)
@@ -56,6 +64,12 @@ def main() -> None:
                 print(f'\n\033[2m{event.name}({json.dumps(event.input)})\033[0m', flush=True)
             elif isinstance(event, TurnFinished):
                 print()
+            elif isinstance(event, UsageUpdated):
+                usage = event.usage
+                print(
+                    f'\n\033[2m{usage.input_tokens} in / {usage.output_tokens} out'
+                    f'  ${usage.cost(agent.model):.4f}\033[0m'
+                )
 
 
 if __name__ == '__main__':

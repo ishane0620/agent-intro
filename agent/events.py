@@ -23,3 +23,7 @@ class ToolCallFinished:
 @dataclass
 class TurnFinished:
     stop_reason: str
+
+@dataclass
+class UsageUpdated:
+    usage: object

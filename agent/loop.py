@@ -2,8 +2,8 @@ from collections.abc import Iterator
 
 import anthropic
 
-from agent.events import TextDelta, ToolCallFinished, ToolCallStarted, TurnFinished
-
+from agent.events import TextDelta, ToolCallFinished, ToolCallStarted, TurnFinished, UsageUpdated
+from agent.usage import Usage
 MODEL = 'claude-sonnet-5'
 
 
@@ -15,6 +15,7 @@ class Agent:
         self.tool_funcs = tool_funcs
         self.system = system
         self.model = model
+        self.usage = Usage()
 
     def reset(self) -> None:
         self.messages.clear()
@@ -34,9 +35,11 @@ class Agent:
                     if event.type == 'content_block_delta' and event.delta.type == 'text_delta':
                         yield TextDelta(event.delta.text)
                 reply = stream.get_final_message()
+                self.usage += Usage.from_api(reply.usage)
 
             self.messages.append({'role': 'assistant', 'content': reply.content})
             if reply.stop_reason != 'tool_use':
+                yield UsageUpdated(self.usage)
                 yield TurnFinished(reply.stop_reason)
                 return
 
