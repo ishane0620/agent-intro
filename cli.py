@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-
+from agent.events import TextDelta, ToolCallStarted, TurnFinished
 import file_agent
 from agent.loop import Agent
 from prompts import build_system_prompt
@@ -49,7 +49,13 @@ def main() -> None:
         if line == '/messages':
             print(json.dumps(plain(agent.messages), indent=2))
             continue
-        print(agent.prompt(line))
+        for event in agent.prompt(line):
+            if isinstance(event, TextDelta):
+                print(event.text, end='', flush=True)
+            elif isinstance(event, ToolCallStarted):
+                print(f'\n\033[2m{event.name}({json.dumps(event.input)})\033[0m', flush=True)
+            elif isinstance(event, TurnFinished):
+                print()
 
 
 if __name__ == '__main__':
